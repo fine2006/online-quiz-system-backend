@@ -1,22 +1,25 @@
-"""
-URL configuration for quiz_backend project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/5.2/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
+# project/urls.py
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
+
+# Import the SocialLoginView and the Google adapter
+from quiz_app.views import GoogleLoginView
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path("admin/", admin.site.urls),
+    # App URLs
+    path("api/", include("quiz_app.urls")),
+    # dj-rest-auth and allauth URLs
+    path("api/auth/", include("dj_rest_auth.urls")),
+    path("api/auth/registration/", include("dj_rest_auth.registration.urls")),
+    # Include the social login URLs for Google
+    # This creates the URL pattern 'api/auth/google/' that will handle the POST request with the code.
+    # Required for dj-rest-auth, though allauth URLs might not be hit directly by api
+    # === USE YOUR CUSTOM GOOGLE LOGIN VIEW HERE ===
+    # This now uses the subclass with the adapter_class attribute set
+    path("api/auth/google/", GoogleLoginView.as_view(), name="rest_google_login"),
+    # ================================
+    # If you use allauth views for email confirmation etc., keep this.
+    # If only API, you might remove or adjust based on dj-rest-auth setup.
+    path("accounts/", include("allauth.urls")),  # Needed by dj-rest-auth registration
 ]

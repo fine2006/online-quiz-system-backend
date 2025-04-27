@@ -31,14 +31,39 @@ class IsStudent(BasePermission):
 
 class IsMarkedStudent(BasePermission):
     """
-    Denies access if the authenticated user is a marked student.
-    This is typically used with `~IsMarkedStudent` in permission classes.
+    Custom permission to only allow marked student users.
+    This checks if the user *is* a marked student.
     """
 
     def has_permission(self, request, view):
-        # This permission checks if the user *is* marked.
-        # To deny access to marked students, you use `~IsMarkedStudent`.
-        return request.user and request.user.is_authenticated and request.user.is_marked
+        # Check if the user is authenticated and is a student
+        if not (
+            request.user and request.user.is_authenticated and request.user.is_student()
+        ):
+            return False  # Not authenticated or not a student
+
+        # Check if the student is marked
+        return request.user.is_marked
+
+    # object-level permission not needed for this check
+
+
+class IsNotMarkedStudent(BasePermission):
+    """
+    Custom permission to only allow students who are NOT marked.
+    """
+
+    def has_permission(self, request, view):
+        # Check if the user is authenticated and is a student
+        if not (
+            request.user and request.user.is_authenticated and request.user.is_student()
+        ):
+            return False  # Not authenticated or not a student
+
+        # Check if the student is NOT marked
+        return not request.user.is_marked  # This is the key difference
+
+    # object-level permission not needed for this check
 
 
 class IsQuizTeacherOrAdmin(BasePermission):

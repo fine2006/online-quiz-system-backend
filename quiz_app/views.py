@@ -14,6 +14,7 @@ from .models import (
     ParticipantAnswer,
     Roles,
     QuestionTypes,
+    AnswerOption,
 )
 from .serializers import (
     UserSerializer,
@@ -27,6 +28,7 @@ from .permissions import (
     IsTeacherOrAdmin,
     IsStudent,
     IsMarkedStudent,
+    IsNotMarkedStudent,
     IsQuizTeacherOrAdmin,
     IsAttemptOwnerOrTeacherOrAdmin,
 )
@@ -130,6 +132,8 @@ class QuizViewSet(viewsets.ModelViewSet):
     # permission_classes will be determined by get_permissions
 
     def get_serializer_class(self):
+        if self.action == "submit":
+            return QuizSubmissionSerializer
         if self.action in ["create", "update", "partial_update"]:
             return QuizWritableSerializer
         # For list, retrieve, and the submit action, use the read-only serializer
@@ -148,7 +152,7 @@ class QuizViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), IsTeacherOrAdmin(), IsQuizTeacherOrAdmin()]
         elif self.action == "submit":
             # Only authenticated Students who are NOT marked can submit
-            return [IsAuthenticated(), IsStudent(), ~IsMarkedStudent()]
+            return [IsAuthenticated(), IsStudent(), IsNotMarkedStudent()]
         else:  # list, retrieve, and any other actions
             # Allow any user (authenticated or unauthenticated) to list/retrieve quizzes
             return [AllowAny()]
@@ -157,7 +161,7 @@ class QuizViewSet(viewsets.ModelViewSet):
         # Assign the logged-in user as the teacher for the quiz
         serializer.save(teacher=self.request.user)
 
-    @action(detail=True, methods=["post"], serializer_class=QuizSubmissionSerializer)
+    @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):
         """Handles quiz submission from a student."""
         quiz = (

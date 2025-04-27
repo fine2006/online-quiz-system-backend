@@ -1,11 +1,12 @@
 # quiz_app/serializers.py
-from rest_framework import serializers
+
 from django.db import transaction
 from django.utils import timezone
-from django.db.models import OuterRef, Subquery, Max, Count
-from django.db.models.functions import Rank
-from django.db.models import Window
 
+# Import the necessary serializers module
+from rest_framework import serializers
+
+# Import necessary models and Roles Enum, and QuestionTypes Enum
 from .models import (
     CustomUser,
     Quiz,
@@ -17,173 +18,368 @@ from .models import (
     QuestionTypes,
 )
 
+# Imports needed for result serializers' calculations
+from django.db.models import Max, Q  # Import Q for complex filtering
+# Consider importing F and Q objects if complex queries are needed in serializers
+# from django.db.models import F
 
-# Helper to handle nested updates/creates
-def update_or_create_nested(
-    parent_instance, items_data, item_model, foreign_key_field, related_name
-):
-    """
-    Handles updating, creating, and deleting nested items.
-    parent_instance: The instance the items belong to (e.g., a Quiz for Questions).
-    items_data: The list of nested item data from the serializer (list of dicts).
-    item_model: The Django model for the nested items (e.g., Question).
-    foreign_key_field: The name of the foreign key field in item_model linking to parent_instance.
-    related_name: The related_name from the parent to the children (e.g., 'questions').
-    """
-    # Get IDs of existing items
-    existing_items_ids = set(
-        getattr(parent_instance, related_name).values_list("id", flat=True)
-    )
-    # Get IDs from submitted data
-    submitted_items_ids = set(
-        item.get("id") for item in items_data if "id" in item and item["id"] is not None
-    )
+# Imports needed for rank calculation (if using Window functions - requires Django 3.2+)
+from django.db.models import Window
+from django.db.models.functions import Rank  # Note: Rank is a Window function
 
-    # Items to delete (exist in DB but not in submitted data)
-    items_to_delete_ids = existing_items_ids - submitted_items_ids
-    if items_to_delete_ids:
-        item_model.objects.filter(id__in=items_to_delete_ids).delete()
 
-    # Items to create or update
-    for item_data in items_data:
-        item_id = item_data.get("id")
-        defaults = {
-            k: v for k, v in item_data.items() if k != "id"
-        }  # Exclude 'id' from defaults
-        # Add the foreign key linking to the parent
-        defaults[foreign_key_field] = parent_instance
+# Helper to get QuestionTypes Enum member from string value
+# Create a dictionary mapping the string value of each Enum member to the member itself
+QUESTION_TYPE_ENUM_MAP = {member.value: member for member in QuestionTypes}
 
-        if item_id in existing_items_ids:
-            # Update existing item
-            item_instance = item_model.objects.get(id=item_id)
-            for key, value in defaults.items():
-                setattr(item_instance, key, value)
-            item_instance.save()
-        else:
-            # Create new item
-            item_instance = item_model.objects.create(**defaults)
 
-        # Handle nested items (e.g., AnswerOptions within Questions) if applicable
-        if (
-            "answer_options" in item_data and related_name == "questions"
-        ):  # Specific logic for Question -> AnswerOption
-            update_or_create_nested(
-                parent_instance=item_instance,
-                items_data=item_data["answer_options"],
-                item_model=AnswerOption,
-                foreign_key_field="question",
-                related_name="answer_options",
-            )
+def get_question_type_enum_from_string(value_string):
+    """Looks up a QuestionTypes Enum member based on its string value."""
+    return QUESTION_TYPE_ENUM_MAP.get(value_string)
+
+
+# --- Basic Serializers ---
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the CustomUser model.
+    Used by dj-rest-auth for the /api/auth/user/ endpoint and in read-only contexts.
+    """
+
     class Meta:
         model = CustomUser
-        fields = ("id", "username", "email", "role", "is_marked")
-        read_only_fields = (
+        fields = ["id", "username", "email", "role", "is_marked"]
+        # Fields are typically read-only when this serializer is used in other read-only serializers
+        # For the /api/auth/user/ endpoint for updating, a different serializer might be configured
+        # via dj-rest-auth settings (e.g., USER_DETAILS_SERIALIZER) that makes these fields writable.
+        # For this file's context (read-only in other serializers), read_only_fields can be set or omitted.
+        # Let's explicitly mark key fields as read-only as per common usage in other serializers.
+        read_only_fields = [
+            "id",
             "username",
             "email",
             "role",
-        )  # Allow admin to potentially mark/unmark
+        ]  # is_marked might be editable by admin user details endpoint
 
 
+# --- Read-Only Nested Serializers ---
+
+
+# This is the read-only serializer for AnswerOption used in QuestionReadOnlySerializer and ParticipantAnswerResultSerializer
+# It should NOT expose the 'is_correct' field by default.
 class AnswerOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnswerOption
+        # FIX: Remove 'is_correct' from the fields list for the general read-only serializer
         fields = (
             "id",
             "text",
-            "is_correct",
-        )  # is_correct is included for writable serializers
-
-
-class QuestionSerializer(serializers.ModelSerializer):
-    answer_options = AnswerOptionSerializer(many=True, required=False)
-
-    class Meta:
-        model = Question
-        fields = (
-            "id",
-            "question_type",
-            "text",
-            "points",
-            "correct_answer_bool",
-            "answer_options",
+            # "is_correct", # Removed
         )
+        # Setting all fields listed above as read-only
+        read_only_fields = fields
 
 
-class QuizWritableSerializer(serializers.ModelSerializer):
-    questions = QuestionSerializer(many=True, required=False)
-    teacher = serializers.ReadOnlyField(
-        source="teacher.username"
-    )  # Show teacher username, not writable
-
-    class Meta:
-        model = Quiz
-        fields = (
-            "id",
-            "title",
-            "teacher",
-            "timing_minutes",
-            "available_from",
-            "available_to",
-            "questions",
-        )
-        read_only_fields = ("teacher",)  # Ensure teacher cannot be set via API input
-
-    def create(self, validated_data):
-        questions_data = validated_data.pop("questions", [])
-        # Assign the logged-in user as the teacher (set in the view's perform_create)
-        # validated_data['teacher'] is implicitly set by the view
-        quiz = Quiz.objects.create(**validated_data)
-
-        with transaction.atomic():
-            for question_data in questions_data:
-                answer_options_data = question_data.pop("answer_options", [])
-                question = Question.objects.create(quiz=quiz, **question_data)
-                for option_data in answer_options_data:
-                    AnswerOption.objects.create(question=question, **option_data)
-
-        return quiz
-
-    def update(self, instance, validated_data):
-        questions_data = validated_data.pop("questions", [])
-
-        # Update quiz instance fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        with transaction.atomic():
-            # Handle nested questions and their answer options
-            update_or_create_nested(
-                parent_instance=instance,
-                items_data=questions_data,
-                item_model=Question,
-                foreign_key_field="quiz",
-                related_name="questions",
-            )
-
-        return instance
-
-
+# This is the read-only serializer for Question used in QuizReadOnlySerializer and ParticipantAnswerResultSerializer
+# Depends on AnswerOptionSerializer
 class QuestionReadOnlySerializer(serializers.ModelSerializer):
-    # Do NOT expose is_correct here by default
-    answer_options = serializers.SerializerMethodField()
+    # Use AnswerOptionSerializer here which now correctly hides is_correct
+    answer_options = AnswerOptionSerializer(many=True, read_only=True)
 
     class Meta:
         model = Question
         fields = ("id", "question_type", "text", "points", "answer_options")
-
-    def get_answer_options(self, obj):
-        # This version hides the `is_correct` field
-        return AnswerOptionSerializer(
-            obj.answer_options.all(), many=True, context=self.context
-        ).data
-        # Alternative if AnswerOptionSerializer did not include is_correct by default:
-        # return [{'id': opt.id, 'text': opt.text} for opt in obj.answer_options.all()]
+        # FIX: read_only_fields must be a list or tuple
+        read_only_fields = fields
 
 
+# --- Writable Nested Serializers ---
+
+
+# This is the writable serializer for AnswerOption used in QuizQuestionWritableSerializer
+# This serializer *does* need the 'is_correct' field for teachers to set.
+# No dependencies on other serializers defined in this file.
+class QuizAnswerOptionWritableSerializer(serializers.ModelSerializer):
+    """
+    Writable serializer for AnswerOption. Handles saving individual option instances.
+    Parent serializer is responsible for passing the 'question' instance during save.
+    """
+
+    class Meta:
+        model = AnswerOption
+        fields = ["id", "text", "is_correct"]  # Include is_correct here for writing
+        extra_kwargs = {
+            "id": {
+                "read_only": False,
+                "required": False,
+            }  # Allow ID to be sent for updates
+        }
+
+    def validate(self, data):
+        # Simple validation: ensure text is not empty
+        if not data.get("text"):
+            raise serializers.ValidationError("Answer option text cannot be empty.")
+        # No need to validate 'question' FK here; it's set by the parent serializer/save method.
+        return data
+
+
+# This is the writable serializer for Question used in QuizWritableSerializer
+# Depends on QuizAnswerOptionWritableSerializer
+class QuizQuestionWritableSerializer(serializers.ModelSerializer):
+    """
+    Writable serializer for Question, includes nested AnswerOptions.
+    Overrides create/update to handle nested answer options and set the 'quiz' FK.
+    This is where the answer_options.set() logic for updates lives.
+    """
+
+    # Define nested options using the writable serializer
+    answer_options = QuizAnswerOptionWritableSerializer(many=True, required=False)
+    correct_answer_bool = serializers.BooleanField(required=False, allow_null=True)
+
+    class Meta:
+        model = Question
+        fields = [
+            "id",
+            "quiz",
+            "question_type",
+            "text",
+            "points",
+            "answer_options",
+            "correct_answer_bool",
+        ]
+        extra_kwargs = {
+            "id": {"read_only": False, "required": False},  # Allow ID for updates
+            "quiz": {
+                "read_only": True
+            },  # Quiz FK is set by parent Quiz serializer's save method
+        }
+
+    # --- Refactored Validation ---
+    # Consolidate all validation logic here in the main validate method
+    def validate(self, data):
+        # Get all necessary fields from the 'data' dictionary passed to validate
+        question_type = data.get("question_type")
+        answer_options = data.get(
+            "answer_options"
+        )  # This is the validated list of option data
+        correct_answer_bool = data.get("correct_answer_bool")  # Check if it's in data
+
+        # Convert string question_type to Enum using the helper
+        # Use the helper function defined at the top
+        question_type_enum = get_question_type_enum_from_string(question_type)
+
+        # --- Check field requirements based on create/update (self.instance) and data presence ---
+
+        # Require question_type on create
+        if question_type is None and self.instance is None:
+            raise serializers.ValidationError(
+                {"question_type": "This field is required."}
+            )
+
+        # If question_type is provided, validate its relation to other fields
+        if question_type_enum:  # Check if a valid enum member was found
+            if question_type_enum in [
+                QuestionTypes.SINGLE_MCQ,
+                QuestionTypes.MULTI_MCQ,
+            ]:
+                # Check for correct_answer_bool presence when it shouldn't exist
+                if correct_answer_bool is not None:
+                    raise serializers.ValidationError(
+                        {
+                            "correct_answer_bool": f"{question_type} questions should not have correct_answer_bool."
+                        }
+                    )
+                # Require answer_options on create or if explicitly provided in update data
+                # If it's create OR (it's update AND 'answer_options' key is present in data)
+                if answer_options is None and (
+                    self.instance is None or "answer_options" in data
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "answer_options": f"{question_type} questions must have answer options."
+                        }
+                    )
+
+                # Validate content of answer options list (counts, correct answers)
+                if (
+                    answer_options is not None
+                ):  # Only check if answer_options data was provided
+                    if not answer_options:
+                        raise serializers.ValidationError(
+                            {
+                                "answer_options": "MCQ questions must have answer options."
+                            }
+                        )
+
+                    correct_count = sum(
+                        opt.get("is_correct", False) for opt in answer_options
+                    )
+
+                    if (
+                        question_type_enum == QuestionTypes.SINGLE_MCQ
+                        and correct_count != 1
+                    ):
+                        raise serializers.ValidationError(
+                            "Single MCQ must have exactly one correct answer."
+                        )
+
+                    if (
+                        question_type_enum == QuestionTypes.MULTI_MCQ
+                        and correct_count < 1
+                    ):
+                        raise serializers.ValidationError(
+                            "Multi MCQ must have at least one correct answer."
+                        )
+
+            elif question_type_enum == QuestionTypes.TRUE_FALSE:
+                # Check for answer_options presence when it shouldn't exist
+                if answer_options is not None:
+                    raise serializers.ValidationError(
+                        {
+                            "answer_options": f"{question_type} questions should not have answer options."
+                        }
+                    )
+                # Require correct_answer_bool on create or if present in update data
+                # If it's create OR (it's update AND 'correct_answer_bool' key is present in data)
+                if correct_answer_bool is None and (
+                    self.instance is None or "correct_answer_bool" in data
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "correct_answer_bool": f"{question_type} questions must specify correct_answer_bool (true/false)."
+                        }
+                    )
+            # If question_type is provided but not recognized, this case is handled by DRF default validation
+            # If question_type is provided but doesn't map to a known enum value, get_question_type_enum_from_string returns None,
+            # and the outer `if question_type_enum:` block is skipped. This is handled implicitly by default validation on the field itself.
+
+        # Check text requirement
+        # If it's create OR (it's update AND 'text' key is present in data)
+        if not data.get("text") and (self.instance is None or "text" in data):
+            raise serializers.ValidationError(
+                {"text": "Question text cannot be empty."}
+            )
+
+        # Check points requirement
+        # If it's create OR (it's update AND 'points' key is present in data)
+        points = data.get("points")
+        if points is None and (self.instance is None or "points" in data):
+            raise serializers.ValidationError({"points": "Points must be provided."})
+        elif points is not None and (
+            not isinstance(points, (int, float)) or points <= 0
+        ):
+            raise serializers.ValidationError(
+                {"points": "Points must be a positive number."}
+            )
+
+        return data
+
+    @transaction.atomic  # Ensure atomicity for question and its options
+    def create(self, validated_data):
+        # Override create to handle nested answer options and set the 'quiz' FK
+        # 'quiz' instance is expected in validated_data because parent serializer passes it via save()
+        answer_options_data = validated_data.pop(
+            "answer_options", []
+        )  # Pop nested data
+
+        # Create the Question instance
+        # validated_data should now contain 'quiz' instance passed by parent
+        question_instance = Question.objects.create(
+            **validated_data
+        )  # 'quiz' FK is set here
+
+        # Manually create answer options for the new question
+        # No need to call .set() during initial creation, saving the option with the FK is sufficient.
+        for option_data in answer_options_data:
+            # AnswerOption serializer handles its own validation
+            option_serializer = QuizAnswerOptionWritableSerializer(data=option_data)
+            option_serializer.is_valid(raise_exception=True)
+            # Create the AnswerOption instance, setting the 'question' FK
+            option_serializer.save(
+                question=question_instance
+            )  # Pass question to set FK
+
+        # Returning the instance after saving.
+        return question_instance
+
+    @transaction.atomic  # Ensure atomicity
+    def update(self, instance, validated_data):
+        # Override update to handle nested answer options (update, create, delete)
+        # 'quiz' instance might be in validated_data if parent serializer passes it (good practice)
+        answer_options_data = validated_data.pop("answer_options", None)
+
+        # Update the Question instance fields (excluding nested data)
+        # Iterate only over fields present in validated_data for PATCH
+        for attr, value in validated_data.items():
+            # Only set attributes that are not the nested 'answer_options' field itself
+            if attr != "answer_options":
+                setattr(instance, attr, value)
+        instance.save()  # Save the main instance fields
+
+        # --- Handle Nested Answer Options for THIS question instance ---
+        # This happens *after* the question instance is saved/updated
+        if (
+            answer_options_data is not None
+        ):  # Process options only if data is provided in request
+            existing_options = {str(o.pk): o for o in instance.answer_options.all()}
+            incoming_options_map = {
+                str(o.get("id")): o for o in answer_options_data if o.get("id")
+            }
+
+            # Determine which existing options are NOT in the incoming data (to delete)
+            options_to_delete = [
+                option
+                for pk, option in existing_options.items()
+                if pk not in incoming_options_map
+            ]
+
+            # Delete options not in incoming data for THIS question
+            if options_to_delete:
+                # Use a list() to evaluate the queryset before deleting to avoid issues
+                instance.answer_options.filter(
+                    id__in=[opt.id for opt in options_to_delete]
+                ).delete()
+
+            processed_option_instances = []  # Collect updated/created question instances
+
+            # Process incoming answer options for THIS question
+            for option_data in answer_options_data:
+                option_id = option_data.get("id")
+                existing_option = (
+                    existing_options.get(str(option_id)) if option_id else None
+                )
+
+                # Use the nested AnswerOption serializer to update or create the option instance
+                option_serializer = QuizAnswerOptionWritableSerializer(
+                    instance=existing_option,  # Pass existing instance for update or None for create
+                    data=option_data,  # Data for the option
+                    partial=True,  # Allow partial updates
+                    # context={'request': self.context.get('request')}
+                )
+                option_serializer.is_valid(raise_exception=True)
+                # Call the nested serializer's save method, explicitly setting the 'question' FK to THIS question instance
+                processed_option_instance = option_serializer.save(
+                    question=instance
+                )  # Pass question instance
+
+                processed_option_instances.append(processed_option_instance)
+
+            # --- FIX: Use .set() to update answer_options for THIS question ---
+            # After processing all options for this question, use .set() to update the relationship.
+            # This replaces the question's answer_options with the updated/created set.
+            # This was the crucial line the error message indicated was needed during update.
+            instance.answer_options.set(processed_option_instances)
+            # No need to save instance (Question) after .set() for ManyToOne/OneToMany.
+
+        return instance
+
+
+# --- Top-Level Read-Only Serializers ---
+
+
+# This is the read-only serializer for Quiz
+# Depends on UserSerializer and QuestionReadOnlySerializer
 class QuizReadOnlySerializer(serializers.ModelSerializer):
     teacher = UserSerializer(read_only=True)  # Use read-only user serializer
     questions = QuestionReadOnlySerializer(many=True)
@@ -207,8 +403,15 @@ class QuizReadOnlySerializer(serializers.ModelSerializer):
             "has_availability_window",
             "questions",
         )
+        # FIX: read_only_fields must be a list or tuple, not the string "__all__"
+        # To make all listed fields read-only, assign the fields tuple itself.
+        read_only_fields = fields
 
 
+# --- Submission Serializers ---
+
+
+# No dependencies on other serializers defined in this file
 class ParticipantAnswerSubmitSerializer(serializers.Serializer):
     """Serializer for submitting individual answers within a quiz attempt."""
 
@@ -236,13 +439,18 @@ class ParticipantAnswerSubmitSerializer(serializers.Serializer):
             )
 
         try:
-            question = Question.objects.get(id=question_id)
+            # Use select_related for quiz to avoid N+1 queries later if accessing quiz properties
+            question = (
+                Question.objects.select_related("quiz")
+                .prefetch_related("answer_options")
+                .get(id=question_id)
+            )
         except Question.DoesNotExist:
             raise serializers.ValidationError(
                 f"Question with ID {question_id} does not exist."
             )
 
-        # Store question object for later use in QuizSubmissionSerializer validation
+        # Store question object for later use in QuizSubmissionSerializer validation or view
         data["question"] = question
 
         # Validate based on question type
@@ -289,14 +497,22 @@ class ParticipantAnswerSubmitSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     "selected_answer_bool is required for TRUE_FALSE."
                 )
+        else:
+            # Handle cases for potential other question types if needed
+            if selected_option_ids or selected_answer_bool is not None:
+                raise serializers.ValidationError(
+                    f"Answer format invalid for question type {question.question_type}."
+                )
 
         return data
 
 
+# Depends on ParticipantAnswerSubmitSerializer
 class QuizSubmissionSerializer(serializers.Serializer):
     """Serializer for the overall quiz submission payload."""
 
     quiz_id = serializers.IntegerField()
+    # Use the submit serializer for nested answers
     answers = ParticipantAnswerSubmitSerializer(many=True)
 
     def validate(self, data):
@@ -307,13 +523,14 @@ class QuizSubmissionSerializer(serializers.Serializer):
             raise serializers.ValidationError("quiz_id is required.")
 
         try:
+            # Use prefetch_related for questions and answer_options for efficient access
             quiz = Quiz.objects.prefetch_related("questions__answer_options").get(
                 id=quiz_id
             )
         except Quiz.DoesNotExist:
             raise serializers.ValidationError(f"Quiz with ID {quiz_id} does not exist.")
 
-        # Store quiz object for later use in view
+        # Store quiz object in validated_data for later use in view
         data["quiz"] = quiz
 
         # Check if the quiz is available for submission
@@ -323,37 +540,53 @@ class QuizSubmissionSerializer(serializers.Serializer):
             )
 
         # Check for duplicate question IDs in the submission
-        question_ids = [answer["question_id"] for answer in answers_data]
+        question_ids = [
+            answer.get("question_id")
+            for answer in answers_data
+            if answer.get("question_id") is not None
+        ]
         if len(question_ids) != len(set(question_ids)):
             raise serializers.ValidationError(
                 "Duplicate question IDs found in the submission."
             )
 
-        # Optional: Check if *all* questions from the quiz are answered
-        # quiz_question_ids = set(quiz.questions.values_list('id', flat=True))
-        # submitted_question_ids = set(question_ids)
-        # if quiz_question_ids != submitted_question_ids:
-        #     raise serializers.ValidationError("Submission must include answers for all questions in the quiz.")
-
         # Ensure all submitted question IDs belong to the quiz
         valid_quiz_question_ids = set(quiz.questions.values_list("id", flat=True))
         for answer_data in answers_data:
-            if answer_data["question_id"] not in valid_quiz_question_ids:
+            # The validate method of ParticipantAnswerSubmitSerializer already
+            # validated that the question exists and belongs to the quiz implicitly
+            # if the question object was attached. Let's re-check explicitly here for safety.
+            submitted_question_id = answer_data.get("question_id")
+            if (
+                submitted_question_id is not None
+                and submitted_question_id not in valid_quiz_question_ids
+            ):
                 raise serializers.ValidationError(
-                    f"Question ID {answer_data['question_id']} does not belong to this quiz."
+                    f"Question ID {submitted_question_id} does not belong to this quiz."
                 )
+
+        # Optional: Check if *all* questions from the quiz are answered
+        # This depends on whether incomplete submissions are allowed.
+        # If all questions must be answered:
+        # quiz_question_ids = set(quiz.questions.values_list('id', flat=True))
+        # submitted_question_ids = set(question_ids)
+        # if quiz_question_ids != submitted_question_ids:
+        #      missing_ids = list(quiz_question_ids - submitted_question_ids)
+        #      raise serializers.ValidationError(f"Submission must include answers for all questions. Missing IDs: {missing_ids}")
 
         return data
 
 
+# Depends on QuestionReadOnlySerializer
 class ParticipantAnswerResultSerializer(serializers.ModelSerializer):
     """Serializer for viewing results of individual participant answers."""
 
     # Use QuestionReadOnlySerializer which hides default `is_correct` on AnswerOption
     question = QuestionReadOnlySerializer(read_only=True)
-    selected_options = AnswerOptionSerializer(
-        many=True, read_only=True
-    )  # Shows selected options
+    # Use the standard AnswerOptionSerializer to show selected options
+    # which includes the `is_correct` field. Conditional visibility
+    # is handled by parent serializer methods.
+    selected_options = AnswerOptionSerializer(many=True, read_only=True)
 
     # Fields to conditionally show correct answers
     correct_answer_bool = serializers.SerializerMethodField()
@@ -366,80 +599,76 @@ class ParticipantAnswerResultSerializer(serializers.ModelSerializer):
             "question",
             "selected_options",
             "selected_answer_bool",
-            "is_correct",
-            "correct_answer_bool",
-            "correct_options",
+            "is_correct",  # This is the calculated correctness of the participant's answer
+            "correct_answer_bool",  # This is the serializer method field for the correct T/F answer
+            "correct_options",  # This is the serializer method field for the correct MCQ options
         )
-        read_only_fields = "__all__"
+        # FIX: read_only_fields must be a list or tuple
+        read_only_fields = fields
 
-    def get_correct_answer_bool(self, obj):
-        # Only show correct answer if the quiz availability window has passed OR there was no window.
-        # This logic depends on the parent attempt and quiz.
+    # --- The expected method fields are defined here ---
+    def get_correct_answer_bool(self, obj):  # <-- This method should exist
+        # Only show correct answer if the quiz availability window has passed OR there was no end window.
         attempt = obj.attempt
         quiz = attempt.quiz
         now = timezone.now()
 
-        # Show correct answers if the quiz is NOT currently available for submission
-        # This happens if:
-        # 1. There was a window and it has passed (`now > quiz.available_to`)
-        # 2. There was a start time but no end time, and the start time is in the future (`now < quiz.available_from` and `quiz.available_to` is None) - quiz hasn't started yet.
-        # 3. There was an end time but no start time, and the end time has passed (`now > quiz.available_to` and `quiz.available_from` is None) - quiz has ended.
-        # 4. There was a window and the current time is outside of it (`now < quiz.available_from` or `now > quiz.available_to`)
-        # Simpler logic: Show if the quiz is *not* currently available for submission.
-        # This is the inverse of `quiz.is_available_for_submission`.
-
-        # Let's refine: Show results AFTER the quiz has ended, or if it had no end time, show immediately.
-        # If quiz.available_to is not None and timezone.now() > quiz.available_to: Show results
-        # If quiz.available_to is None: Show results (as it implies results are immediate or not time-gated)
-        # Otherwise (quiz.available_to is in the future or None, and quiz.available_from is in the past or None, AND now is within the window): Don't show results.
-
+        # Show results if the quiz is NOT currently available for submission because the end time has passed
         show_results = False
-        if quiz.available_to is not None:
-            if now > quiz.available_to:
-                show_results = True  # Window ended
-        else:
-            show_results = True  # No end window, show results
+        if quiz.available_to is not None and now > quiz.available_to:
+            show_results = True
+
+        # Also show results if there was no end time specified (results are immediate)
+        if quiz.available_to is None:
+            show_results = True
 
         if show_results and obj.question.question_type == QuestionTypes.TRUE_FALSE:
+            # obj.question should be prefetched by QuizAttemptResultSerializer
             return obj.question.correct_answer_bool
         return None  # Do not show correct boolean otherwise
 
-    def get_correct_options(self, obj):
-        # Only show correct options if the quiz availability window has passed OR there was no window.
+    def get_correct_options(self, obj):  # <-- This method should exist
+        # Only show correct options if the quiz availability window has passed OR there was no end window.
         # Same logic as get_correct_answer_bool
         attempt = obj.attempt
         quiz = attempt.quiz
         now = timezone.now()
 
         show_results = False
-        if quiz.available_to is not None:
-            if now > quiz.available_to:
-                show_results = True  # Window ended
-        else:
-            show_results = True  # No end window, show results
+        if quiz.available_to is not None and now > quiz.available_to:
+            show_results = True
+        if quiz.available_to is None:
+            show_results = True
 
         if show_results and obj.question.question_type in [
             QuestionTypes.SINGLE_MCQ,
             QuestionTypes.MULTI_MCQ,
         ]:
+            # obj.question should be prefetched by QuizAttemptResultSerializer
             # Return serialized correct options, including is_correct=True
+            # Use AnswerOptionSerializer which excludes is_correct
             correct_options = obj.question.answer_options.filter(is_correct=True)
-            return AnswerOptionSerializer(
-                correct_options, many=True
-            ).data  # Use AnswerOptionSerializer to show text/id/is_correct
+            return AnswerOptionSerializer(correct_options, many=True).data
         return []  # Do not show correct options otherwise
 
 
+# Depends on UserSerializer, QuizReadOnlySerializer, ParticipantAnswerResultSerializer
 class QuizAttemptResultSerializer(serializers.ModelSerializer):
     """Serializer for viewing overall quiz attempt results."""
 
     user = UserSerializer(read_only=True)
+    # Use QuizReadOnlySerializer which includes QuestionReadOnlySerializer
     quiz = QuizReadOnlySerializer(read_only=True)
+    # Use ParticipantAnswerResultSerializer for nested answer results
     participant_answers = ParticipantAnswerResultSerializer(many=True, read_only=True)
 
     # Add fields for rank and best score
+    # Note: Rank calculation here within the serializer method can be inefficient for large datasets.
+    # It's often better to annotate the rank in the view's queryset if possible.
     rank = serializers.SerializerMethodField()
-    best_score_for_quiz = serializers.SerializerMethodField()
+    best_score_for_user_on_quiz = (
+        serializers.SerializerMethodField()
+    )  # Renamed for clarity
 
     class Meta:
         model = QuizAttempt
@@ -451,52 +680,49 @@ class QuizAttemptResultSerializer(serializers.ModelSerializer):
             "submission_time",
             "participant_answers",
             "rank",
-            "best_score_for_quiz",
+            "best_score_for_user_on_quiz",  # Renamed field
         )
-        read_only_fields = "__all__"
+        # FIX: read_only_fields must be a list or tuple
+        read_only_fields = fields
 
     def get_rank(self, obj):
         """
-        Calculates the rank of this attempt based on score for the same quiz.
-        Timed quizzes: Rank by highest score.
-        Untimed quizzes: Rank by first attempt score (or simply score if only one attempt allowed).
-        Assuming multiple attempts are possible and rank is based on score across all attempts for timed,
-        and score of the *first* attempt for untimed.
-        This implementation ranks all attempts for this quiz by score descending, then time ascending.
-        This might not perfectly match "first attempt score for untimed" across different users,
-        but provides a consistent ranking.
-        For true "rank based on first attempt score for untimed", we'd need to filter to only first attempts.
-        Let's implement ranking all attempts by score desc, time asc for simplicity, but note the
-        potential mismatch with a strict "first attempt score" requirement for untimed quizzes if users have multiple attempts.
-        A more precise method for untimed would involve grouping by user and taking the first attempt's score.
-        Given the complexity and potential performance impact within a serializer, a simplified rank is shown.
+        Calculates the rank of this attempt based on score and submission time
+        compared to other attempts for the same quiz.
+        Orders by score (desc) then submission_time (asc).
+        Note: This calculates the rank of the *attempt*, not the user's best rank.
+        Consider performance for many attempts. This implementation calculates rank on the fly.
         """
-        # Query attempts for the same quiz, ordered by score (desc) and submission time (asc)
-        # Use Window function for ranking (requires Django 3.2+)
-        # Or use a subquery approach if not using 3.2+
+        # Requires Django 3.2+ for Window functions
+        # from django.db.models import Window
+        # from django.db.models.functions import Rank
 
-        # Subquery approach for broader compatibility
-        # Find attempts with a higher score
-        higher_scores = QuizAttempt.objects.filter(
-            quiz=obj.quiz, score__gt=obj.score
-        ).distinct()
+        # Find attempts with higher score OR same score and earlier time for the same quiz
+        rank_query = (
+            QuizAttempt.objects.filter(
+                quiz=obj.quiz  # Filter for the same quiz as the current object
+            )
+            .filter(
+                # Score is higher OR (Score is same AND submission is earlier)
+                Q(score__gt=obj.score)
+                | Q(score=obj.score, submission_time__lt=obj.submission_time)
+            )
+            .count()
+        )
 
-        # Find attempts with the same score, but submitted earlier
-        same_score_earlier = QuizAttempt.objects.filter(
-            quiz=obj.quiz, score=obj.score, submission_time__lt=obj.submission_time
-        ).distinct()
+        # Rank is 1 + count of attempts that are definitively ranked above this one
+        rank = rank_query + 1
 
-        # Rank is 1 + number of attempts with a higher score + number of attempts with the same score but earlier
-        # Ensure we only count unique users/attempts depending on desired ranking behaviour (all attempts vs best attempt per user)
-        # The request implies ranking *attempts*, not users based on their best attempt.
-        rank = 1 + higher_scores.count() + same_score_earlier.count()
-
-        # Handle ties: Attempts with the same score and same submission time will have the same rank calculation here.
-        # If stricter tie-breaking is needed (e.g., based on attempt ID), the subquery needs adjustment.
+        # Note: This basic count rank handles ties by giving the same rank number.
+        # If multiple attempts have the exact same score and same submission time, they will have the same rank number.
+        # The view's queryset annotation is the preferred way for performance.
+        # If calculating here for simplicity but potential inefficiency:
+        # For production or large datasets, calculate this in the view's queryset using Window functions
+        # and access the annotated field in the serializer.
 
         return rank
 
-    def get_best_score_for_quiz(self, obj):
+    def get_best_score_for_user_on_quiz(self, obj):
         """
         Finds the best score for the *current user* on this quiz.
         Timed quizzes: Max score across all attempts by the user.
@@ -507,10 +733,10 @@ class QuizAttemptResultSerializer(serializers.ModelSerializer):
         if not attempts_by_user.exists():
             return 0.0  # Should not happen if we're serializing an attempt
 
-        # Sort attempts by submission time to find the first one
+        # Sort attempts by submission time to find the first one if needed
         attempts_by_user = attempts_by_user.order_by("submission_time")
 
-        if obj.quiz.timing_minutes and obj.quiz.timing_minutes > 0:
+        if obj.quiz.timing_minutes is not None and obj.quiz.timing_minutes > 0:
             # Timed quiz: best score is the max score
             return (
                 attempts_by_user.aggregate(max_score=Max("score"))["max_score"] or 0.0
@@ -519,3 +745,143 @@ class QuizAttemptResultSerializer(serializers.ModelSerializer):
             # Untimed quiz: best score is the score of the first attempt
             first_attempt = attempts_by_user.first()
             return first_attempt.score if first_attempt else 0.0
+
+
+# --- Top-Level Writable Serializers ---
+
+
+# This is the main writable serializer for Quiz
+# Depends on QuizQuestionWritableSerializer
+class QuizWritableSerializer(serializers.ModelSerializer):
+    """
+    Writable serializer for Quiz, with manual nested create/update orchestrated
+    by overriding create/update methods and calling nested serializers' saves.
+    """
+
+    # Use the writable nested serializer for questions
+    # This serializer's create/update will iterate through questions data and call
+    # QuizQuestionWritableSerializer's create/update methods.
+    questions = QuizQuestionWritableSerializer(many=True)
+
+    # Read-only fields that will be returned in the response but not taken from input
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = [
+            "id",
+            "title",
+            "timing_minutes",
+            "available_from",
+            "available_to",
+            "questions",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    # No need for _update_or_create_nested helper with this approach,
+    # as the logic is manually handled in create/update via nested serializers' saves.
+
+    @transaction.atomic  # Ensure atomicity for the whole operation (Quiz, Questions, Options)
+    def create(self, validated_data):
+        # Extract nested questions data first
+        questions_data = validated_data.pop(
+            "questions"
+        )  # Questions data is required for create
+
+        # Create the main Quiz instance
+        # The current user (teacher/admin) is automatically set as the creator by the view.
+        quiz_instance = Quiz.objects.create(**validated_data)
+
+        # Manually handle nested question creation using the nested serializer's create method
+        # The nested serializer's create method handles its own children (options).
+        for question_data in questions_data:
+            # Create a new instance of the nested serializer for each question data dictionary
+            question_serializer = QuizQuestionWritableSerializer(data=question_data)
+            question_serializer.is_valid(raise_exception=True)
+            # Call the nested serializer's save method, passing the parent quiz instance.
+            # The nested serializer's create method handles saving itself,
+            # setting the quiz FK, and handling its nested options.
+            question_serializer.save(quiz=quiz_instance)  # Pass quiz instance to set FK
+
+        return quiz_instance
+
+    @transaction.atomic  # Ensure atomicity
+    def update(self, instance, validated_data):
+        # Extract nested questions data (might be absent in PATCH)
+        questions_data = validated_data.get("questions", None)
+
+        # Update main Quiz instance fields (excluding nested data)
+        # Use a copy of validated_data keys to iterate safely while modifying
+        # Only update fields present in validated_data for PATCH
+        fields_to_update_on_quiz = {
+            attr: value for attr, value in validated_data.items() if attr != "questions"
+        }
+
+        for attr, value in fields_to_update_on_quiz.items():
+            setattr(instance, attr, value)
+        instance.save()  # Save the main instance fields
+
+        # Manually handle question updates/creations/deletions
+        if (
+            questions_data is not None
+        ):  # Process options only if data is provided in request
+            existing_questions = {str(o.pk): o for o in instance.questions.all()}
+            incoming_questions_map = {
+                str(o.get("id")): o for o in questions_data if q.get("id")
+            }
+
+            # Determine which existing options are NOT in the incoming data (to delete)
+            options_to_delete = [
+                option
+                for pk, option in existing_options.items()
+                if pk not in incoming_options_map
+            ]
+
+            # Delete options not in incoming data for THIS question
+            if options_to_delete:
+                # Use a list() to evaluate the queryset before deleting to avoid issues
+                instance.questions.filter(
+                    id__in=[q.id for q in options_to_delete]
+                ).delete()
+
+            processed_question_instances = []  # Collect updated/created question instances
+
+            # Process incoming questions (update or create)
+            for question_data in questions_data:
+                question_id = question_data.get("id")
+                existing_question = (
+                    existing_questions.get(str(question_id)) if question_id else None
+                )
+
+                # Use the nested Question serializer's update/create method
+                # Its update method handles nested options and the answer_options.set() call
+                question_serializer = QuizQuestionWritableSerializer(
+                    instance=existing_question,  # Pass existing instance for update or None for create
+                    data=question_data,  # Data for the question and its options
+                    partial=True,  # Allow partial updates
+                    # context={'request': self.context.get('request')}
+                )
+                question_serializer.is_valid(raise_exception=True)
+                # Call the nested serializer's save method, passing the parent quiz instance.
+                # The nested serializer's save() method handles saving itself,
+                # setting the quiz FK, and handling its nested options (including the .set()).
+                processed_question_instance = question_serializer.save(
+                    quiz=instance
+                )  # Pass quiz instance
+
+                processed_question_instances.append(processed_question_instance)
+
+            # For ManyToOne/OneToMany relationship (Quiz <- Question),
+            # saving the child with the parent FK is sufficient to link it.
+            # Deletion of questions not in incoming data handles removal.
+            # A final .set() on quiz.questions is typically not strictly necessary here
+            # unless you have complex ManyToMany relationships managed on the parent side.
+            # We rely on question_serializer.save(quiz=instance) to establish the link.
+
+        # Re-save the main instance after nested updates if any fields were updated before
+        # instance.save() # Usually not needed if fields were set directly and saved earlier
+
+        return instance

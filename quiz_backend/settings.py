@@ -197,10 +197,6 @@ ACCOUNT_LOGIN_METHODS = ["email"]  # Use a list or tuple
 ACCOUNT_SIGNUP_FIELDS = ["email"]  # If email is required and username is not
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_VERIFICATION = "optional"  # Or 'mandatory' or 'none'
-# ACCOUNT_CONFIRM_EMAIL_ON_GET = True # If using email verification
-# ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 3
-# ACCOUNT_LOGIN_ATTEMPTS_LIMIT = 5
-# ACCOUNT_LOGIN_ATTEMPTS_TIMEOUT = 300 # In seconds
 
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
@@ -252,3 +248,4 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # Allow your frontend during development
     "https://your-frontend-domain.com",  # Your production frontend domain
 ]
+TEST_RUNNER = "pytest_django.runner.TestCaseMatcher"

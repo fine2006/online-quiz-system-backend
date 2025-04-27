@@ -12,6 +12,8 @@ django-environ = "*"
 django-cors-headers = "*"
 requests = "*"
 cryptography = "*"
+pytest = "*"
+pytest-django = "*"
 
 [dev-packages]
 

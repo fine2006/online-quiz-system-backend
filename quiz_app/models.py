@@ -5,7 +5,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.core.validators import MinValueValidator
-from django.db.models import Max, OuterRef, Subquery
+from django.db.models import Sum, Max, OuterRef, Subquery
 from django.db.models.constraints import UniqueConstraint
 
 
@@ -70,6 +70,22 @@ class Quiz(models.Model):
     available_from = models.DateTimeField(null=True, blank=True)
     available_to = models.DateTimeField(null=True, blank=True)
 
+    def get_total_points(self):
+        """
+        Calculates the total points for the quiz by summing the points of all its questions.
+        """
+        # Use the 'questions' related_name from the ForeignKey on the Question model
+        # Use aggregate(Sum('points')) to get the sum of the 'points' field
+        result = self.questions.aggregate(total_points=Sum("points"))
+        # The aggregate returns a dictionary, get the 'total_points' value.
+        # Default to 0.0 if there are no questions or the sum is None (e.g., no points set).
+        return result.get("total_points") or 0.0
+
+    # Optional: You can also add a property to access this method's result like an attribute
+    @property
+    def total_points(self):
+        return self.get_total_points()
+
     @property
     def has_availability_window(self):
         return self.available_from is not None and self.available_to is not None
@@ -114,6 +130,15 @@ class Question(models.Model):
     correct_answer_bool = models.BooleanField(
         null=True, blank=True
     )  # For True/False questions
+
+    def get_correct_answer_options(self):
+        """
+        Returns a queryset of correct AnswerOption objects for this question.
+        This method can be called from templates.
+        """
+        return self.answer_options.filter(
+            is_correct=True
+        )  # Use filter here (in Python)
 
     def __str__(self):
         return f"Q: {self.text[:50]}... ({self.quiz.title})"

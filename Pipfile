@@ -5,7 +5,6 @@ name = "pypi"
 
 [packages]
 djangorestframework = "*"
-django-allauth = "*"
 dj-rest-auth = "*"
 djangorestframework-simplejwt = "*"
 django-environ = "*"

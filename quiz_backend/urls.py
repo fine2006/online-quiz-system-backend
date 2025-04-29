@@ -22,4 +22,5 @@ urlpatterns = [
     # If you use allauth views for email confirmation etc., keep this.
     # If only API, you might remove or adjust based on dj-rest-auth setup.
     path("accounts/", include("allauth.urls")),  # Needed by dj-rest-auth registration
+    path("", include("quiz_frontend.urls")),
 ]

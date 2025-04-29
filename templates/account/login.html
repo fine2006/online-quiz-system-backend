@@ -1,0 +1,16 @@
+{# your-project-root/templates/account/login.html #}
+{% extends "base.html" %}
+{% load i18n account socialaccount %}
+
+{% block title %}{% trans "Sign In" %}{% endblock %}
+
+{% block content %}
+
+<h1>{% trans "Sign In" %}</h1>
+
+<p>{% blocktrans %}Please sign in using your Google account.{% endblocktrans %}</p>
+
+{# Direct link to initiate the Google OAuth flow #}
+<a href="{% provider_login_url 'google' process='login' %}">Sign In with Google</a>
+
+{% endblock %}

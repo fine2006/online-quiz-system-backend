@@ -1,0 +1,207 @@
+{# quiz_frontend/templates/quiz_frontend/quiz_detail.html #}
+{% extends "base.html" %}
+{% load static i18n account socialaccount %}
+
+{% block title %}{{ quiz.title }} - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>{{ quiz.title }}</h2>
+    <p>Duration: {{ quiz.timing_minutes }} minutes</p>
+    {# Timer placeholder if you implement one in JS #}
+    {# <div id="quiz-timer"></div> #}
+
+    {# Form for questions - handled by JS for AJAX submission #}
+    <form id="quiz-form">
+        {# Hidden inputs for JS - Keep quiz_id and attempt_id here for client-side reference if needed, BUT REMOVE THEM FROM THE PAYLOAD #}
+        <input type="hidden" id="quiz_id_input" value="{{ quiz.pk }}">     {# Add ID for easier selection #}
+
+
+        {# Loop through questions #}
+        {% for question in quiz.questions.all %}
+            {# Div for each question with data attribute for ID #}
+            <div class="question" data-question-id="{{ question.pk }}">
+                <h3>Question {{ forloop.counter }}: {{ question.text }}</h3>
+                <p>({{ question.points|floatformat:1 }} points)</p>
+
+                {# Display answer options based on question type #}
+                {% if question.question_type == QuestionTypes.SINGLE_MCQ %}
+                    <ul>
+                        {% for option in question.answer_options.all %}
+                            <li>
+                                <label>
+                                    <input type="radio" name="question_{{ question.pk }}" value="{{ option.pk }}" required>
+                                    {{ option.text }}
+                                </label>
+                            </li>
+                        {% endfor %}
+                    </ul>
+
+                {% elif question.question_type == QuestionTypes.MULTI_MCQ %}
+                     <ul>
+                        {% for option in question.answer_options.all %}
+                            <li>
+                                <label>
+                                    <input type="checkbox" name="question_{{ question.pk }}" value="{{ option.pk }}">
+                                    {{ option.text }}
+                                </label>
+                            </li>
+                        {% endfor %}
+                    </ul>
+
+                {% elif question.question_type == QuestionTypes.TRUE_FALSE %}
+                    <ul>
+                        <li>
+                            <label>
+                                <input type="radio" name="question_{{ question.pk }}" value="true" required> True
+                            </label>
+                        </li>
+                        <li>
+                            <label>
+                                <input type="radio" name="question_{{ question.pk }}" value="false" required> False
+                            </label>
+                        </li>
+                    </ul>
+
+                {# Add input fields for other question types here #}
+                {# {% elif question.question_type == QuestionTypes.SHORT_ANSWER or question.question_type == QuestionTypes.ESSAY %} #}
+                {#      <textarea name="question_{{ question.pk }}" rows="4" cols="50" placeholder="Your answer..."></textarea> #}
+
+                {% else %}
+                    <p>Unsupported question type.</p>
+                {% endif %}
+            </div>
+            <hr>
+        {% endfor %}
+
+        <button type="submit">Submit Quiz</button>
+    </form>
+
+    <div id="submission-messages" style="margin-top: 20px;"></div>
+
+{% endblock %}
+{% block extra_js %}
+    <script>
+        const submissionApiUrl = "{{ backend_api_url }}"; // This URL should still be correct for the endpoint handling submission
+        const quizForm = document.getElementById('quiz-form');
+        const submissionMessagesDiv = document.getElementById('submission-messages');
+
+        quizForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            // Get IDs from hidden inputs - NOW used for the payload body
+            // const attemptId = document.getElementById('attempt_id_input').value; // Get from hidden input ID
+            const quizId = document.getElementById('quiz_id_input').value;       // Get from hidden input ID
+
+            const participantAnswers = [];
+
+            const questionDivs = quizForm.querySelectorAll('.question');
+            questionDivs.forEach(questionDiv => {
+                const questionId = questionDiv.dataset.questionId;
+
+                let selectedOptions = [];
+                let selectedBoolean = null;
+                let textAnswer = null;
+
+                const radioInputs = questionDiv.querySelectorAll('input[type="radio"][name="question_' + questionId + '"]');
+                const checkboxInputs = questionDiv.querySelectorAll('input[type="checkbox"][name="question_' + questionId + '"]');
+                const textareaInput = questionDiv.querySelector('textarea[name="question_' + questionId + '"]');
+
+                if (radioInputs.length > 0) {
+                    radioInputs.forEach(input => {
+                        if (input.checked) {
+                            if (input.value === 'true' || input.value === 'false') {
+                                selectedBoolean = (input.value === 'true');
+                            } else {
+                                selectedOptions.push(parseInt(input.value));
+                            }
+                        }
+                    });
+                 } else if (checkboxInputs.length > 0) {
+                     checkboxInputs.forEach(input => {
+                         if (input.checked) {
+                             selectedOptions.push(parseInt(input.value));
+                         }
+                     });
+                } else if (textareaInput) {
+                     textAnswer = textareaInput.value;
+                }
+
+                participantAnswers.push({
+                    question_id: parseInt(questionId),
+                    selected_option_ids: selectedOptions,
+                    selected_answer_bool: selectedBoolean,
+                    text_answer: textAnswer,
+                });
+            });
+
+            // --- Prepare Corrected Payload for API Submission ---
+            const submissionPayload = {
+                // Add quiz_id back to the payload body
+                quiz_id: parseInt(quizId),
+
+                // Rename participant_answers to 'answers' as required by the serializer
+                answers: participantAnswers,
+
+                // Keep other top-level fields required by the serializer
+                submission_time: new Date().toISOString(), // Example: Add current time
+
+                // Add any other top-level fields required by your serializer
+                // (e.g., user_id if not automatically handled by serializer based on authenticated user)
+                // user: {{ user.pk }}, // Example if user ID is required in payload body - usually backend gets from session
+            };
+
+            console.log("Submission Payload:", submissionPayload); // Log the corrected payload
+
+            submissionMessagesDiv.innerHTML = '';
+
+            fetch(submissionApiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(submissionPayload)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(errorData => {
+                         const errorMessage = errorData ? (errorData.detail || JSON.stringify(errorData)) : response.statusText;
+                         throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorMessage}`);
+                    }).catch(() => {
+                         throw new Error(`HTTP error! Status: ${response.status}, ${response.statusText}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Submission successful:', data);
+                const submittedAttemptId = data.id; // Use ID from response if available, fallback to initial attemptId
+                if (submittedAttemptId) {
+                    const resultsPageUrl = `/attempts/${submittedAttemptId}/results/`;
+                    window.location.href = resultsPageUrl;
+                } else {
+                    submissionMessagesDiv.innerHTML = `<p style="color: green;">Submission successful, but could not find attempt ID for redirection.</p>`;
+                }
+            })
+            .catch(error => {
+                console.error('Submission failed:', error);
+                submissionMessagesDiv.innerHTML = `<p style="color: red;">Submission failed: ${error.message || 'An unknown error occurred.'}</p>`;
+            });
+        });
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+{% endblock %}

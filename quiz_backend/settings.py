@@ -10,7 +10,9 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+from datetime import timedelta
 import environ
 
 env = environ.Env()
@@ -51,6 +53,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     # Your app
     "quiz_app",
+    "quiz_frontend",
 ]
 
 MIDDLEWARE = [
@@ -72,13 +75,16 @@ ROOT_URLCONF = "quiz_backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [os.path.join(BASE_DIR, "templates")],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",  # Required by allauth
+                "django.contrib.auth.context_processors.auth",  # Required for user in templates
                 "django.contrib.messages.context_processors.messages",
+                # "allauth.account.context_processors.account",  # Required by allauth
+                # "allauth.socialaccount.context_processors.socialaccount",  # Required by allauth
             ],
         },
     },
@@ -122,7 +128,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Kolkata"
 
 USE_I18N = True
 
@@ -132,7 +138,17 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
+# Static files settings (ensure this is configured correctly for CSS/JS/Images)
+# STATIC_URL = 'static/' # This should be present
+# If you have project-level static files (e.g., in a 'static' directory at project root),
+# you might need to configure STATICFILES_DIRS
 STATIC_URL = "static/"
+STATICFILES_DIRS = [
+    os.path.join(
+        BASE_DIR, "static"
+    ),  # This tells Django to look in the 'static' folder at your project root
+]
+# STATIC_ROOT = os.path.join(BASE_DIR, "static")
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -156,7 +172,6 @@ REST_FRAMEWORK = {
 
 SITE_ID = 1
 
-from datetime import timedelta
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
@@ -208,10 +223,10 @@ SOCIALACCOUNT_PROVIDERS = {
         "SCOPE": [
             "profile",
             "email",
+            "openid",
         ],
-        "AUTH_PARAMS": {
-            "access_type": "online",
-        },
+        "AUTH_PARAMS": {"access_type": "online", "prompt": "consent"},
+        "OAUTH_PKCE_ENABLED": True,
     }
 }
 
@@ -249,3 +264,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://your-frontend-domain.com",  # Your production frontend domain
 ]
 TEST_RUNNER = "pytest_django.runner.TestCaseMatcher"
+
+
+LOGIN_REDIRECT_URL = "/"
+ACCOUNT_LOGOUT_REDIRECT_URL = "/"

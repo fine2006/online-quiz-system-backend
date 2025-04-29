@@ -1,0 +1,28 @@
+{# quiz_frontend/templates/quiz_frontend/quiz_list.html #}
+{% extends "base.html" %}
+
+{% block title %}Available Quizzes - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>Available Quizzes</h2>
+
+    {% if quizzes %}
+        <ul>
+            {% for quiz in quizzes %}
+                <li>
+                    {# Link to the quiz_detail view using the quiz's pk #}
+                    <a href="{% url 'quiz_detail' pk=quiz.pk %}">
+                        {{ quiz.title }} ({{ quiz.timing_minutes }} minutes)
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No quizzes are currently available according to the schedule.</p>
+        <p>Check back later!</p>
+    {% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

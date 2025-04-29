@@ -1,0 +1,29 @@
+{# quiz_frontend/templates/quiz_frontend/attempt_list.html #}
+{% extends "base.html" %}
+
+{% block title %}My Attempts - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>My Quiz Attempts</h2>
+
+    {% if attempts %}
+        <ul>
+            {% for attempt in attempts %}
+                <li>
+                    <a href="{% url 'attempt_detail' pk=attempt.pk %}">
+                        Attempt on: {{ attempt.quiz.title }}
+                    </a>
+                    <p>Score: {{ attempt.score|floatformat:1 }} / {{ attempt.quiz.total_points|floatformat:1 }}</p>
+                    <p>Submitted at: {{ attempt.submission_time|date:"H:i:s D, d M Y" }}</p>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>You have not completed any quiz attempts yet.</p>
+        <p>Find available quizzes on the <a href="{% url 'quiz_list' %}">Quizzes page</a>.</p>
+    {% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

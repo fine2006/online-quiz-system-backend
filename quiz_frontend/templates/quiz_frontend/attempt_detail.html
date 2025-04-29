@@ -1,0 +1,73 @@
+{# quiz_frontend/templates/quiz_frontend/attempt_detail.html #}
+{% extends "base.html" %}
+
+{% load static i18n account socialaccount %}
+
+{% block title %}Attempt Results - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>Results for: {{ attempt.quiz.title }}</h2>
+
+    <div>
+        <p><strong>Your Score:</strong> {{ attempt.score|floatformat:1 }} / {{ attempt.quiz.total_points|floatformat:1 }}</p>
+        <p><strong>Submitted At:</strong> {{ attempt.submission_time|date:"H:i:s D, d M Y" }}</p>
+    </div>
+
+    <h3>Your Answers</h3>
+
+    {% for pa in participant_answers %}
+        <div>
+
+            <p>Question {{ forloop.counter }}: {{ pa.question.text }}</p>
+            <p>Points: {{ pa.question.points|floatformat:1 }}</p>
+            <p>Question Type: {{ pa.question.get_question_type_display }}</p>
+
+            <p><strong>Your Answer:</strong></p>
+            {% if pa.question.question_type == QuestionTypes.SINGLE_MCQ or pa.question.question_type == QuestionTypes.MULTI_MCQ %}
+                {% if pa.selected_options.exists %}
+                    <ul>
+                        {% for selected_option in pa.selected_options.all %}
+                            <li>{{ selected_option.text }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p>No option selected.</p>
+                {% endif %}
+            {% elif pa.question.question_type == QuestionTypes.TRUE_FALSE %}
+                <p>{{ pa.selected_answer_bool|yesno:"True,False,Not Answered" }}</p>
+            {% endif %}
+
+            <p><strong>Correctness:</strong>
+                {% if pa.is_correct is True %}
+                    <span>Correct</span>
+                {% elif pa.is_correct is False %}
+                    <span>Incorrect</span>
+                {% else %}
+                    <span>Not Graded / No Answer</span>
+                {% endif %}
+            </p>
+          {% if show_correct_answers %}
+              <p><strong>Correct Answer:</strong></p>
+              {% if pa.question.question_type == QuestionTypes.SINGLE_MCQ or pa.question.question_type == QuestionTypes.MULTI_MCQ %}
+                  <ul>
+                      {# Call the get_correct_answer_options method on the question object #}
+                      {% for correct_option in pa.question.get_correct_answer_options %} {# <-- Use the method here #}
+                          <li>{{ correct_option.text }}</li>
+                      {% endfor %}
+                  </ul>
+              {% elif pa.question.question_type == QuestionTypes.TRUE_FALSE %}
+                   <p>{{ pa.question.correct_answer_bool|yesno:"True,False,Not Applicable" }}</p>
+              {# ... (other question types) ... #}
+              {% endif %}
+          {% endif %}
+
+
+        </div>
+    {% endfor %}
+
+    <p><a href="{% url 'attempt_list' %}">&larr; Back to My Attempts</a></p>
+
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

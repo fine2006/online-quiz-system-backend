@@ -1,0 +1,21 @@
+{# quiz_frontend/templates/quiz_frontend/profile.html #}
+{% extends "base.html" %}
+
+{% block title %}User Profile - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>User Profile</h2>
+
+    <div>
+        <p><strong>Username:</strong> {{ user.username|default:"N/A" }}</p>
+        <p><strong>Email:</strong> {{ user.email|default:"N/A" }}</p>
+        <p><strong>Role:</strong> {{ user.role|default:"N/A" }}</p>
+        <p><strong>Marked:</strong> {% if user.is_marked %}Yes{% else %}No{% endif %}</p>
+    </div>
+
+    <p><a href="{% url 'attempt_list' %}">View My Quiz Attempts</a></p>
+
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

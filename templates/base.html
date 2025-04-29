@@ -1,0 +1,53 @@
+{# your-project-root/templates/base.html #}
+{% load static %}
+{% load i18n account socialaccount %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Quiz App{% endblock %}</title>
+    {# Link your static files (CSS, favicon, etc.) #}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}"> {# Link your custom CSS file #}
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <header>
+        <div>
+            <h1><a href="{% url 'index' %}">Quiz Application</a></h1>
+            <nav>
+                {% if user.is_authenticated %}
+                    <span>Welcome, {{ user.username|default:user.email }}!</span>
+                    <a href="{% url 'quiz_list' %}">Quizzes</a>
+                    <a href="{% url 'attempt_list' %}">My Attempts</a>
+                    <a href="{% url 'profile' %}">Profile</a>
+                    <a href="{% url 'account_logout' %}">Log Out</a>
+                {% else %}
+                    <a href="{% url 'account_login' %}">Log In with Google</a>
+                {% endif %}
+                <a href="{% url 'index' %}">Home</a>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% block content %}
+        {% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2025 Quiz App</p>
+    </footer>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

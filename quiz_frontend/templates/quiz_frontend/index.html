@@ -1,0 +1,18 @@
+{# quiz_frontend/templates/quiz_frontend/index.html #}
+{% extends "base.html" %}
+
+{% block title %}Home - Quiz App{% endblock %}
+
+{% block content %}
+    <h2>Welcome to the Online Quiz System</h2>
+
+    {% if user.is_authenticated %}
+        <p>You are logged in as {{ user.username|default:user.email }}.</p>
+        <p><a href="{% url 'quiz_list' %}">View Available Quizzes</a></p>
+    {% else %}
+        <p>Please <a href="{% url 'account_login' %}">log in with Google</a> to view and take quizzes.</p>
+    {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}
